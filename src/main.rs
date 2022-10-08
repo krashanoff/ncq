@@ -67,7 +67,7 @@ async fn main() {
             .with_root_certificates(trust_store)
             .with_no_client_auth();
         let mut tls_config = tls_config.dangerous();
-        let proto = "http/0";
+        let proto = "ribbit/0";
         println!("Using proto {}", proto);
         tls_config.set_certificate_verifier(SkipServerVerification::new());
         tls_config.cfg.alpn_protocols = vec![proto.as_bytes().to_vec()];
