@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1"
+rustls = "0.20"
+s2n-quic = { version = "1", features = ["provider-tls-rustls"] }
+
 clap = { version = "3", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
-rustls-pemfile = "1"
-rustls = { version = "0.20", features = ["dangerous_configuration"] }
-quinn = "0.8"

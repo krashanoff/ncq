@@ -1,95 +1,70 @@
-use std::{fs::File, io, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf};
 
 use clap::Parser;
-use quinn::{ClientConfig, Endpoint, NewConnection};
-use rustls::{Certificate, RootCertStore};
-use rustls_pemfile::{certs, read_all};
-use tokio::io::{stdin, stdout, AsyncBufReadExt, BufReader};
+use s2n_quic::{client::Connect, Client, Server};
+use tokio::io::BufReader;
 
 #[derive(Parser)]
 #[clap(about, version)]
 struct Options {
+    /// TODO: Listen on the socket for connections, rather than send on it.
     #[clap(short, long)]
-    cert_store: Vec<PathBuf>,
+    listen: bool,
 
+    /// TODO: CLIENT MODE: whether we should open a bidirectional stream.
+    #[clap(short, long)]
+    bidi: bool,
+
+    /// TODO: Disables checking of certificates.
+    #[clap(short, long)]
+    insecure: bool,
+
+    /// Path to some certificate stores. For example, your system root CA store.
+    #[clap(short, long)]
+    cert: PathBuf,
+
+    /// Name of the server to use in QUIC packets.
     #[clap()]
     server_name: String,
 
-    #[clap()]
-    hostname: String,
-
-    #[clap()]
-    port: u32,
+    /// Address to listen on or connect to.
+    #[clap(value_parser = clap::value_parser!(SocketAddr))]
+    address: SocketAddr,
 }
 
-/// Dummy certificate verifier that treats any certificate as valid.
-/// NOTE, such verification is vulnerable to MITM attacks, but convenient for testing.
-struct SkipServerVerification;
-
-impl SkipServerVerification {
-    fn new() -> Arc<Self> {
-        Arc::new(Self)
-    }
-}
-
-impl rustls::client::ServerCertVerifier for SkipServerVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::Certificate,
-        _intermediates: &[rustls::Certificate],
-        _server_name: &rustls::ServerName,
-        _scts: &mut dyn Iterator<Item = &[u8]>,
-        _ocsp_response: &[u8],
-        _now: std::time::SystemTime,
-    ) -> Result<rustls::client::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::ServerCertVerified::assertion())
-    }
-}
-
-#[tokio::main]
-async fn main() {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> anyhow::Result<()> {
     let opts = Options::parse();
-    let stdin = stdin();
-    let stdout = stdout();
 
-    let cert_paths = opts.cert_store;
-    let config = ClientConfig::new(Arc::new({
-        let mut trust_store = RootCertStore::empty();
+    let tls =
+        s2n_quic::provider::tls::rustls::Client::builder().with_certificate(opts.cert.as_path());
+    let tls = tls?
+        .with_application_protocols(vec![b"ribbit/0"].iter())?
+        .with_key_logging()?
+        .build();
+    let client = Client::builder()
+        .with_tls(tls?)?
+        .with_io("0.0.0.0:0")?
+        .start()
+        .expect("client");
 
-        for cert in cert_paths {
-            let mut f = io::BufReader::new(File::open(cert).expect("certpath"));
-            let c = certs(&mut f).expect("certs");
-            trust_store.add_parsable_certificates(&c);
-        }
+    let mut connection = client
+        .connect(Connect::new(opts.address).with_server_name(opts.server_name))
+        .await?;
+    connection.keep_alive(true)?;
 
-        let mut tls_config = rustls::ClientConfig::builder()
-            .with_safe_defaults()
-            .with_root_certificates(trust_store)
-            .with_no_client_auth();
-        let mut tls_config = tls_config.dangerous();
-        let proto = "ribbit/0";
-        println!("Using proto {}", proto);
-        tls_config.set_certificate_verifier(SkipServerVerification::new());
-        tls_config.cfg.alpn_protocols = vec![proto.as_bytes().to_vec()];
-        tls_config.cfg.clone()
-    }));
-    let mut e = Endpoint::client("0.0.0.0:0".parse().unwrap()).expect("create endpoint");
-    e.set_default_client_config(config);
+    println!("Opening stream");
+    let stream = connection.open_bidirectional_stream().await?;
+    let (mut rx, mut tx) = stream.split();
+    println!("Opened stream");
 
-    println!("connecting to {}:{}", opts.hostname, opts.port);
-    let remote = format!("{}:{}", opts.hostname, opts.port)
-        .parse()
-        .expect("address");
-    let NewConnection { connection, .. } = e
-        .connect(remote, &opts.server_name)
-        .expect("connect")
-        .await
-        .expect("connect");
+    tokio::spawn(async move {
+        let mut stdout = tokio::io::stdout();
+        let _ = tokio::io::copy(&mut rx, &mut stdout).await;
+    });
 
-    let buf = BufReader::new(stdin);
-    let mut lines = buf.lines();
-    while let Ok(Some(line)) = lines.next_line().await {
-        println!("{}", &line);
-        connection.send_datagram(line.into()).expect("send");
-    }
+    let mut stdin = BufReader::new(tokio::io::stdin());
+    tokio::io::copy(&mut stdin, &mut tx).await?;
+
+    Ok(())
 }
