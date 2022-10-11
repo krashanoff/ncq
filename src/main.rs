@@ -5,7 +5,7 @@ use s2n_quic::{client::Connect, Client, Server};
 use tokio::io::BufReader;
 
 #[derive(Parser)]
-#[clap(about, version)]
+#[clap(about, author, version)]
 struct Options {
     /// TODO: Listen on the socket for connections, rather than send on it.
     #[clap(short, long)]

@@ -1,5 +1,6 @@
 [package]
 name = "ncq"
+authors = ["Leonid Krashanoff <leo@krashanoff.com>"]
 version = "0.1.0"
 edition = "2021"
 
