@@ -7,6 +7,10 @@ use tokio::io::BufReader;
 #[derive(Parser)]
 #[clap(about, author, version)]
 struct Options {
+    /// Application protocols to support.
+    #[clap(short, long)]
+    application_protos: Vec<String>,
+
     /// TODO: Listen on the socket for connections, rather than send on it.
     #[clap(short, long)]
     listen: bool,
@@ -39,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
     let tls =
         s2n_quic::provider::tls::rustls::Client::builder().with_certificate(opts.cert.as_path());
     let tls = tls?
-        .with_application_protocols(vec![b"ribbit/0"].iter())?
+        .with_application_protocols(opts.application_protos.iter().map(|s| s.as_str()))?
         .with_key_logging()?
         .build();
     let client = Client::builder()
